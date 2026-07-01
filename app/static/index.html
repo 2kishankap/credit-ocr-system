@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Credit OCR System</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #161d2e;
+    --border: #2a3550;
+    --text: #e6e9f2;
+    --muted: #8b93a7;
+    --accent: #4f8cff;
+    --green: #2ecc71;
+    --amber: #f5a623;
+    --red: #e74c3c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    justify-content: center;
+    padding: 48px 20px;
+  }
+  main { width: 100%; max-width: 640px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 14px; margin: 0 0 32px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  input[type="file"], select {
+    width: 100%;
+    background: #0f1420;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 14px;
+    margin-bottom: 16px;
+  }
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 11px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button:hover:not(:disabled) { filter: brightness(1.1); }
+
+  .stage-list { list-style: none; margin: 0; padding: 0; }
+  .stage-list li {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    font-size: 14px;
+  }
+  .dot {
+    width: 20px; height: 20px; border-radius: 50%;
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700;
+    border: 2px solid var(--border);
+    color: var(--muted);
+  }
+  .dot.done { background: var(--green); border-color: var(--green); color: #04150a; }
+  .dot.active { border-color: var(--accent); color: var(--accent); animation: pulse 1.2s infinite; }
+  .dot.error { background: var(--red); border-color: var(--red); color: white; }
+  .stage-name.done { color: var(--text); }
+  .stage-name.active { color: var(--accent); font-weight: 600; }
+  .stage-name.pending { color: var(--muted); }
+
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  .meta { font-size: 13px; color: var(--muted); margin-top: 16px; line-height: 1.6; }
+  .meta code { color: var(--text); background: #0f1420; padding: 1px 6px; border-radius: 4px; }
+  .banner {
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 13px;
+    margin-top: 16px;
+  }
+  .banner.error { background: rgba(231,76,60,0.12); border: 1px solid var(--red); color: #ffb4ac; }
+  .banner.success { background: rgba(46,204,113,0.12); border: 1px solid var(--green); color: #a9f0c4; }
+  .hidden { display: none; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Credit OCR System</h1>
+  <p class="subtitle">Upload a credit document and watch it move through the processing pipeline.</p>
+
+  <div class="panel">
+    <form id="upload-form">
+      <label for="file">Document (PDF, PNG, JPEG, TIFF)</label>
+      <input type="file" id="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.tiff" required />
+
+      <label for="document_type">Document type</label>
+      <select id="document_type" name="document_type">
+        <option value="loan_application">Loan application</option>
+        <option value="pay_stub">Pay stub</option>
+        <option value="bank_statement">Bank statement</option>
+        <option value="credit_report">Credit report</option>
+        <option value="unknown">Unknown / other</option>
+      </select>
+
+      <button type="submit" id="submit-btn">Upload &amp; process</button>
+    </form>
+  </div>
+
+  <div class="panel hidden" id="status-panel">
+    <ul class="stage-list" id="stage-list"></ul>
+    <div class="meta" id="meta"></div>
+    <div id="banner-container"></div>
+  </div>
+</main>
+
+<script>
+const PHASES = [
+  { key: "upload",     label: "Uploaded",             states: ["uploaded"] },
+  { key: "ocr",        label: "OCR extraction",        states: ["ocr_in_progress", "ocr_complete"] },
+  { key: "extraction", label: "LLM field extraction",  states: ["extraction_in_progress", "extraction_complete"] },
+  { key: "validation", label: "Business rule validation", states: ["validating", "validation_complete"] },
+  { key: "annotate",   label: "Annotation & complete", states: ["annotating", "complete"] },
+];
+const FLAT_STAGES = PHASES.flatMap(p => p.states);
+
+const form = document.getElementById("upload-form");
+const submitBtn = document.getElementById("submit-btn");
+const statusPanel = document.getElementById("status-panel");
+const stageListEl = document.getElementById("stage-list");
+const metaEl = document.getElementById("meta");
+const bannerContainer = document.getElementById("banner-container");
+
+let pollTimer = null;
+
+function renderStages(status) {
+  stageListEl.innerHTML = "";
+  const currentIndex = FLAT_STAGES.indexOf(status);
+  const failed = status === "failed";
+
+  PHASES.forEach((phase, i) => {
+    const firstIdx = FLAT_STAGES.indexOf(phase.states[0]);
+    const lastIdx = FLAT_STAGES.indexOf(phase.states[phase.states.length - 1]);
+
+    let state = "pending";
+    if (!failed) {
+      if (currentIndex > lastIdx) state = "done";
+      else if (currentIndex >= firstIdx) state = (status === "complete" ? "done" : "active");
+    } else {
+      state = "done";
+    }
+
+    const li = document.createElement("li");
+    const dot = document.createElement("div");
+    dot.className = "dot " + state;
+    dot.textContent = state === "done" ? "\u2713" : (i + 1);
+    const name = document.createElement("span");
+    name.className = "stage-name " + state;
+    name.textContent = phase.label;
+    li.appendChild(dot);
+    li.appendChild(name);
+    stageListEl.appendChild(li);
+  });
+
+  if (failed) {
+    const li = stageListEl.lastElementChild;
+    li.querySelector(".dot").className = "dot error";
+    li.querySelector(".dot").textContent = "!";
+    li.querySelector(".stage-name").className = "stage-name active";
+  }
+}
+
+function renderBanner(data) {
+  bannerContainer.innerHTML = "";
+  if (data.status === "failed") {
+    const div = document.createElement("div");
+    div.className = "banner error";
+    div.innerHTML = "<strong>Processing failed.</strong><br/>" + (data.error_message || "No error message returned.");
+    bannerContainer.appendChild(div);
+  } else if (data.status === "complete") {
+    const div = document.createElement("div");
+    div.className = "banner success";
+    div.innerHTML =
+      "<strong>Done.</strong> Pull the full field-level results at " +
+      "<code>GET /documents/" + data.document_id + "/review</code> " +
+      "or view <a href='/documents/" + data.document_id + "/pages/1/annotated' target='_blank'>the annotated page</a>.";
+    bannerContainer.appendChild(div);
+  }
+}
+
+function renderMeta(data) {
+  metaEl.innerHTML =
+    "Document ID: <code>" + data.document_id + "</code><br/>" +
+    "File: " + data.filename + " &middot; Type: " + data.document_type + "<br/>" +
+    "Pages: " + data.page_count + " &middot; Status: <code>" + data.status + "</code>";
+}
+
+async function pollStatus(documentId) {
+  try {
+    const res = await fetch("/documents/" + documentId + "/status");
+    if (!res.ok) throw new Error("status check failed (" + res.status + ")");
+    const data = await res.json();
+
+    statusPanel.classList.remove("hidden");
+    renderStages(data.status);
+    renderMeta(data);
+    renderBanner(data);
+
+    if (data.status === "complete" || data.status === "failed") {
+      clearInterval(pollTimer);
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Upload & process";
+    }
+  } catch (err) {
+    clearInterval(pollTimer);
+    bannerContainer.innerHTML = '<div class="banner error">Lost connection to the API: ' + err.message + "</div>";
+    submitBtn.disabled = false;
+  }
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fileInput = document.getElementById("file");
+  const docType = document.getElementById("document_type").value;
+  if (!fileInput.files.length) return;
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Uploading...";
+  bannerContainer.innerHTML = "";
+
+  const body = new FormData();
+  body.append("file", fileInput.files[0]);
+  body.append("document_type", docType);
+
+  try {
+    const res = await fetch("/documents", { method: "POST", body });
+    if (!res.ok) {
+      const errBody = await res.text();
+      throw new Error("upload failed (" + res.status + "): " + errBody);
+    }
+    const data = await res.json();
+
+    statusPanel.classList.remove("hidden");
+    renderStages(data.status);
+    metaEl.innerHTML = "Document ID: <code>" + data.document_id + "</code>";
+    submitBtn.textContent = "Processing...";
+
+    clearInterval(pollTimer);
+    pollTimer = setInterval(() => pollStatus(data.document_id), 3000);
+    pollStatus(data.document_id);
+  } catch (err) {
+    bannerContainer.innerHTML = '<div class="banner error">' + err.message + "</div>";
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Upload & process";
+  }
+});
+</script>
+</body>
+</html>
