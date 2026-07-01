@@ -1,0 +1,8 @@
+__pycache__
+*.pyc
+.venv
+.git
+.env
+tests
+sample_documents
+*.md
