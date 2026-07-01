@@ -9,7 +9,7 @@ import io
 import logging
 
 from azure.core.exceptions import ResourceExistsError
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import BlobServiceClient, ContentSettings
 
 from app.config import get_settings
 
@@ -38,7 +38,7 @@ class BlobStorage:
             name=blob_path,
             data=io.BytesIO(data),
             overwrite=True,
-            content_settings={"content_type": content_type} if content_type else None,
+            content_settings=ContentSettings(content_type=content_type) if content_type else None,
         )
         return blob_path
 
