@@ -50,7 +50,12 @@ services:
   # every `docker compose up` -- `ollama pull` is a no-op if already cached.
   ollama-init:
     image: ollama/ollama:latest
-    entrypoint: ["sh", "-c", "OLLAMA_HOST=ollama:11434 ollama pull ${OLLAMA_MODEL:-llama3.1:8b}"]
+    entrypoint:
+      [
+        "sh",
+        "-c",
+        "OLLAMA_HOST=ollama:11434 ollama pull ${OLLAMA_MODEL:-llama3.1:8b}",
+      ]
     depends_on:
       ollama:
         condition: service_healthy
